@@ -134,6 +134,7 @@ type schedulerOptions struct {
 	frameworkOutOfTreeRegistry framework.Registry
 	profiles                   []schedulerapi.KubeSchedulerProfile
 	extenders                  []schedulerapi.Extender
+	frameworkCapturer          FrameworkCapturer
 }
 
 // Option configures a Scheduler
@@ -201,6 +202,15 @@ func WithPodMaxBackoffSeconds(podMaxBackoffSeconds int64) Option {
 func WithExtenders(e ...schedulerapi.Extender) Option {
 	return func(o *schedulerOptions) {
 		o.extenders = e
+	}
+}
+
+type FrameworkCapturer func(schedulerapi.KubeSchedulerProfile)
+
+// WithBuildFrameworkCapturer sets a notify function for getting buildframework details.
+func WithBuildFrameworkCapturer(fc FrameworkCapturer) Option {
+	return func(o *schedulerOptions) {
+		o.frameworkCapturer = fc
 	}
 }
 
@@ -273,6 +283,7 @@ func New(client clientset.Interface,
 		registry:                 registry,
 		nodeInfoSnapshot:         snapshot,
 		extenders:                options.extenders,
+		frameworkCapturer:        options.frameworkCapturer,
 	}
 
 	metrics.Register()

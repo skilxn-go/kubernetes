@@ -25,6 +25,7 @@ import (
 
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	utilfeature "k8s.io/apiserver/pkg/util/feature"
 	"k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes/fake"
@@ -1790,6 +1791,287 @@ func TestPluginsConfigurationCompatibility(t *testing.T) {
 			gotPlugins := defProf.ListPlugins()
 			if diff := cmp.Diff(tc.wantPlugins, gotPlugins); diff != "" {
 				t.Errorf("unexpected plugins diff (-want, +got): %s", diff)
+			}
+		})
+	}
+}
+
+func Test(t *testing.T) {
+	// Add serialized versions of scheduler config that exercise available options to ensure compatibility between releases
+	defaultPlugins := map[string][]config.Plugin{
+		"QueueSortPlugin": {
+			{Name: "PrioritySort"},
+		},
+		"PreFilterPlugin": {
+			{Name: "NodeResourcesFit"},
+			{Name: "NodePorts"},
+			{Name: "InterPodAffinity"},
+			{Name: "PodTopologySpread"},
+		},
+		"FilterPlugin": {
+			{Name: "NodeUnschedulable"},
+			{Name: "NodeResourcesFit"},
+			{Name: "NodeName"},
+			{Name: "NodePorts"},
+			{Name: "NodeAffinity"},
+			{Name: "VolumeRestrictions"},
+			{Name: "TaintToleration"},
+			{Name: "EBSLimits"},
+			{Name: "GCEPDLimits"},
+			{Name: "NodeVolumeLimits"},
+			{Name: "AzureDiskLimits"},
+			{Name: "VolumeBinding"},
+			{Name: "VolumeZone"},
+			{Name: "InterPodAffinity"},
+			{Name: "PodTopologySpread"},
+		},
+		"PreScorePlugin": {
+			{Name: "InterPodAffinity"},
+			{Name: "DefaultPodTopologySpread"},
+			{Name: "TaintToleration"},
+			{Name: "PodTopologySpread"},
+		},
+		"ScorePlugin": {
+			{Name: "NodeResourcesBalancedAllocation", Weight: 1},
+			{Name: "ImageLocality", Weight: 1},
+			{Name: "InterPodAffinity", Weight: 1},
+			{Name: "NodeResourcesLeastAllocated", Weight: 1},
+			{Name: "NodeAffinity", Weight: 1},
+			{Name: "NodePreferAvoidPods", Weight: 10000},
+			{Name: "DefaultPodTopologySpread", Weight: 1},
+			{Name: "TaintToleration", Weight: 1},
+			{Name: "PodTopologySpread", Weight: 1},
+		},
+		"BindPlugin": {{Name: "DefaultBinder"}},
+	}
+
+	testcases := []struct {
+		name        string
+		provider    string
+		wantPlugins map[string][]config.Plugin
+	}{
+		{
+			name:        "No Provider specified",
+			wantPlugins: defaultPlugins,
+		},
+		{
+			name:        "DefaultProvider",
+			provider:    config.SchedulerDefaultProviderName,
+			wantPlugins: defaultPlugins,
+		},
+		{
+			name:     "ClusterAutoscalerProvider",
+			provider: algorithmprovider.ClusterAutoscalerProvider,
+			wantPlugins: map[string][]config.Plugin{
+				"QueueSortPlugin": {
+					{Name: "PrioritySort"},
+				},
+				"PreFilterPlugin": {
+					{Name: "NodeResourcesFit"},
+					{Name: "NodePorts"},
+					{Name: "InterPodAffinity"},
+					{Name: "PodTopologySpread"},
+				},
+				"FilterPlugin": {
+					{Name: "NodeUnschedulable"},
+					{Name: "NodeResourcesFit"},
+					{Name: "NodeName"},
+					{Name: "NodePorts"},
+					{Name: "NodeAffinity"},
+					{Name: "VolumeRestrictions"},
+					{Name: "TaintToleration"},
+					{Name: "EBSLimits"},
+					{Name: "GCEPDLimits"},
+					{Name: "NodeVolumeLimits"},
+					{Name: "AzureDiskLimits"},
+					{Name: "VolumeBinding"},
+					{Name: "VolumeZone"},
+					{Name: "InterPodAffinity"},
+					{Name: "PodTopologySpread"},
+				},
+				"PreScorePlugin": {
+					{Name: "InterPodAffinity"},
+					{Name: "DefaultPodTopologySpread"},
+					{Name: "TaintToleration"},
+					{Name: "PodTopologySpread"},
+				},
+				"ScorePlugin": {
+					{Name: "NodeResourcesBalancedAllocation", Weight: 1},
+					{Name: "ImageLocality", Weight: 1},
+					{Name: "InterPodAffinity", Weight: 1},
+					{Name: "NodeResourcesMostAllocated", Weight: 1},
+					{Name: "NodeAffinity", Weight: 1},
+					{Name: "NodePreferAvoidPods", Weight: 10000},
+					{Name: "DefaultPodTopologySpread", Weight: 1},
+					{Name: "TaintToleration", Weight: 1},
+					{Name: "PodTopologySpread", Weight: 1},
+				},
+				"BindPlugin": {{Name: "DefaultBinder"}},
+			},
+		},
+	}
+	for _, tc := range testcases {
+		t.Run(tc.name, func(t *testing.T) {
+			var opts []scheduler.Option
+			if len(tc.provider) != 0 {
+				opts = append(opts, scheduler.WithAlgorithmSource(config.SchedulerAlgorithmSource{
+					Provider: &tc.provider,
+				}))
+			}
+
+			client := fake.NewSimpleClientset()
+			informerFactory := informers.NewSharedInformerFactory(client, 0)
+			recorderFactory := profile.NewRecorderFactory(events.NewBroadcaster(&events.EventSinkImpl{Interface: client.EventsV1beta1().Events("")}))
+
+			sched, err := scheduler.New(
+				client,
+				informerFactory,
+				informerFactory.Core().V1().Pods(),
+				recorderFactory,
+				make(chan struct{}),
+				opts...,
+			)
+
+			if err != nil {
+				t.Fatalf("Error constructing: %v", err)
+			}
+
+			defProf := sched.Profiles["default-scheduler"]
+			gotPlugins := defProf.ListPlugins()
+			if diff := cmp.Diff(tc.wantPlugins, gotPlugins); diff != "" {
+				t.Errorf("unexpected plugins diff (-want, +got): %s", diff)
+			}
+		})
+	}
+}
+
+func TestPluginsArgumentsCompatibility(t *testing.T) {
+	testcases := []struct {
+		name         string
+		pluginConfig []config.PluginConfig
+	}{
+		{
+			name:         "Default",
+			pluginConfig: nil,
+		},
+		{
+			name: "User customed",
+			pluginConfig: []config.PluginConfig{
+				{
+					Name: "NodeResourcesFit",
+					Args: runtime.Unknown{
+						Raw: []byte(`{
+							"ignoredResources": [
+								"foo",
+								"bar"
+							]
+						}`),
+					},
+				},
+				{
+					Name: "PodTopologySpread",
+					Args: runtime.Unknown{
+						Raw: []byte(`{
+							"defaultConstraints": [
+								{
+									"maxSkew": 1,
+									"topologyKey": "foo",
+									"whenUnsatisfiable": "DoNotSchedule"
+								},
+								{
+									"maxSkew": 10,
+									"topologyKey": "bar",
+									"whenUnsatisfiable": "ScheduleAnyway"
+								}
+							]
+						}`),
+					},
+				},
+				{
+					Name: "RequestedToCapacityRatio",
+					Args: runtime.Unknown{
+						Raw: []byte(`{
+							"shape":[
+								"Utilization": 5,
+								"Score": 5
+							],
+							"resources":[
+								"Name": "cpu",
+								"Weight": 10
+							]
+						}`),
+					},
+				},
+				{
+					Name: "InterPodAffinity",
+					Args: runtime.Unknown{
+						Raw: []byte(`{
+							"HardPodAffinityWeight": 100
+						}`),
+					},
+				},
+				{
+					Name: "NodeLabel",
+					Args: runtime.Unknown{
+						Raw: []byte(`{
+							"presentLabels": [
+								"foo",
+								"bar"
+							],
+							"absentLabels": [
+								"apple"
+							],
+							"presentLabelsPreference": [
+								"dog"
+							],
+							"absentLabelsPreference": [
+								"cat"
+							]
+						}`),
+					},
+				},
+				{
+					Name: "ServiceAffinity",
+					Args: runtime.Unknown{
+						Raw: []byte(`{
+							affinityLabels: [
+								"foo",
+								"bar"
+							],
+							antiAffinityLabelsPreference: [
+								"disk",
+								"flash"
+							]
+						}`),
+					},
+				},
+			},
+		},
+	}
+	for _, tc := range testcases {
+		t.Run(tc.name, func(t *testing.T) {
+			client := fake.NewSimpleClientset()
+			informerFactory := informers.NewSharedInformerFactory(client, 0)
+			recorderFactory := profile.NewRecorderFactory(events.NewBroadcaster(&events.EventSinkImpl{Interface: client.EventsV1beta1().Events("")}))
+			_, err := scheduler.New(
+				client,
+				informerFactory,
+				informerFactory.Core().V1().Pods(),
+				recorderFactory,
+				make(chan struct{}),
+				scheduler.WithProfiles(config.KubeSchedulerProfile{
+					SchedulerName: v1.DefaultSchedulerName,
+					PluginConfig:  tc.pluginConfig,
+				}),
+				scheduler.WithBuildFrameworkCapturer(func(p config.KubeSchedulerProfile) {
+					if diff := cmp.Diff(tc.pluginConfig, p.PluginConfig); diff != "" {
+						t.Errorf("unexpected plugin config diff (-want, +got): %s", diff)
+					}
+				}),
+			)
+
+			if err != nil {
+				t.Fatalf("Error constructing: %v", err)
 			}
 		})
 	}
